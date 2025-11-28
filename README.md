@@ -16,7 +16,7 @@ Menu actions
 - Set timezone to United Kingdom: Installs `tzdata` if needed and sets `Europe/London` via `tzselect`.
 - Set root password: Prompts for and updates the root password.
 - System update & upgrade: Runs `apt update/upgrade`, fixes broken installs, and autoremove.
-- Install base packages: Installs a curated set (unzip, nano, lsof, cron, fail2ban, curl, python3/pip, git, ufw, tmux, aptitude, net-tools, pwgen, unattended-upgrades, apt-listchanges, libffi-dev, libssl-dev, fastfetch, etc.).
+- Install base packages: Installs a curated set (unzip, nano, lsof, cron, fail2ban, curl, python3/pip, git, ufw, tmux, aptitude, net-tools, pwgen, unattended-upgrades, apt-listchanges, libffi-dev, libssl-dev, etc.) and then installs Fastfetch from its GitHub release (`fastfetch-linux-{amd64|arm64}.deb`) when available.
 - Suppress login banner: Creates `.hushlogin` for the invoking user (or root).
 - Configure firewall (UFW): Enables UFW, allows SSH (detected port and 22), HTTP/HTTPS, and common app ports (80, 81, 443, 9000); defaults to deny incoming/allow outgoing. Warns on cloud VMs before changing firewall rules and logs `ufw status`.
 - Install Docker: Skips reinstall if Docker already exists; otherwise uses the Docker convenience script, adds the invoking user to the `docker` group, attempts the `docker-compose` plugin/binary via apt (no pip on externally managed Python), enables/starts the daemon, and logs engine info.

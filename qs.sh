@@ -28,7 +28,6 @@ SUPPORTED_PKGS=(
   pwgen
   unattended-upgrades
   apt-listchanges
-  fastfetch
 )
 
 require_root() {
@@ -158,6 +157,7 @@ install_packages() {
   log "Installing requested packages: ${SUPPORTED_PKGS[*]}"
   DEBIAN_FRONTEND=noninteractive apt install -y "${SUPPORTED_PKGS[@]}"
   log "Package installation complete."
+  install_fastfetch
 }
 
 hush_login() {
@@ -481,6 +481,33 @@ command -v docker >/dev/null 2>&1 && docker container ls
 EOF
 
   log "Appended aliases/environment/startup block to ${bashrc} for ${target_user}."
+}
+
+install_fastfetch() {
+  if command -v fastfetch >/dev/null 2>&1; then
+    log "fastfetch already installed; skipping."
+    return
+  fi
+  local arch pkg_url tmp_pkg
+  arch="$(uname -m)"
+  case "${arch}" in
+    x86_64|amd64) arch="amd64" ;;
+    aarch64|arm64) arch="arm64" ;;
+    *) log "Unsupported arch ${arch}; skipping fastfetch install."; return ;;
+  esac
+  pkg_url="https://github.com/fastfetch-cli/fastfetch/releases/latest/download/fastfetch-linux-${arch}.deb"
+  tmp_pkg="/tmp/fastfetch-linux-${arch}.deb"
+  log "Fetching fastfetch from ${pkg_url}..."
+  if curl -fsSL "${pkg_url}" -o "${tmp_pkg}"; then
+    if dpkg -i "${tmp_pkg}"; then
+      log "fastfetch installed from GitHub release."
+    else
+      log "dpkg install of fastfetch failed; consider installing manually."
+    fi
+  else
+    log "Download of fastfetch failed; leaving it uninstalled."
+  fi
+  rm -f "${tmp_pkg}"
 }
 
 rollback_qs_changes() {
