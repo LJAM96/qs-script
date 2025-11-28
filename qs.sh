@@ -5,6 +5,9 @@
 set -euo pipefail
 
 LOG_FILE="${QS_LOG:-/tmp/qs-setup.log}"
+CLOUD_PROVIDER="unknown"
+LOG_HOST="$(hostname -s 2>/dev/null || hostname || echo unknown-host)"
+LOG_USER="${SUDO_USER:-root}"
 SUPPORTED_PKGS=(
   unzip
   nano
@@ -43,7 +46,9 @@ require_apt() {
 
 log() {
   local msg="$*"
-  printf "%s %s\n" "$(date '+%Y-%m-%d %H:%M:%S')" "${msg}" | tee -a "${LOG_FILE}"
+  local ts
+  ts="$(date '+%Y-%m-%d %H:%M:%S')"
+  printf "%s [%s/%s] %s\n" "${ts}" "${LOG_HOST}" "${LOG_USER}" "${msg}" | tee -a "${LOG_FILE}"
 }
 
 confirm() {
@@ -52,8 +57,88 @@ confirm() {
   [[ "${reply}" =~ ^[Yy]([Ee][Ss])?$ ]]
 }
 
+sanitize_port() {
+  local entered="${1:-}" default="${2:-22}"
+  if [[ -z "${entered}" ]]; then
+    echo "${default}"
+    return
+  fi
+  if [[ "${entered}" =~ ^[0-9]+$ && "${entered}" -ge 1 && "${entered}" -le 65535 ]]; then
+    echo "${entered}"
+  else
+    log "Invalid port '${entered}'. Using fallback ${default}."
+    echo "${default}"
+  fi
+}
+
+sanitize_swap_size() {
+  local entered="${1:-}" default="${2:-2}"
+  if [[ -z "${entered}" ]]; then
+    echo "${default}"
+    return
+  fi
+  if [[ "${entered}" =~ ^[0-9]+$ && "${entered}" -ge 1 && "${entered}" -le 64 ]]; then
+    echo "${entered}"
+  else
+    log "Invalid swap size '${entered}'. Using fallback ${default}G."
+    echo "${default}"
+  fi
+}
+
 pause() {
   read -rp "Press Enter to continue..." _
+}
+
+detect_cloud_provider() {
+  local curl_opts=(-fsSL --connect-timeout 1 --max-time 1)
+  if curl "${curl_opts[@]}" "http://169.254.169.254/latest/meta-data/instance-id" >/dev/null 2>&1; then
+    CLOUD_PROVIDER="aws"
+  elif curl "${curl_opts[@]}" -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/id" >/dev/null 2>&1; then
+    CLOUD_PROVIDER="gcp"
+  elif curl "${curl_opts[@]}" -H "Authorization: Bearer Oracle" "http://169.254.169.254/opc/v1/instance/" >/dev/null 2>&1; then
+    CLOUD_PROVIDER="oci"
+  else
+    CLOUD_PROVIDER="unknown"
+  fi
+  log "Cloud detection result: ${CLOUD_PROVIDER}"
+}
+
+cloud_network_managed() {
+  [[ "${CLOUD_PROVIDER}" =~ ^(aws|gcp|oci)$ ]]
+}
+
+cloud_guard_prompt() {
+  local action="${1:-this action}"
+  if cloud_network_managed; then
+    log "Cloud provider ${CLOUD_PROVIDER} detected; ${action} may be governed by cloud firewall rules."
+    if ! confirm "Proceed with ${action}? [y/N] "; then
+      log "Skipped ${action} due to cloud guard."
+      return 1
+    fi
+  fi
+  return 0
+}
+
+preflight_check() {
+  log "Starting preflight checks..."
+  local missing=()
+  for cmd in apt-get systemctl curl; do
+    if ! command -v "${cmd}" >/dev/null 2>&1; then
+      missing+=("${cmd}")
+    fi
+  done
+  if ((${#missing[@]})); then
+    log "Missing required commands: ${missing[*]}"
+    echo "Install missing commands before continuing: ${missing[*]}" >&2
+    exit 1
+  fi
+  if [[ -f /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    source /etc/os-release
+    log "Distro: ${PRETTY_NAME:-${ID:-unknown}}"
+  fi
+  log "Kernel: $(uname -r 2>/dev/null || echo unknown)"
+  log "User context: real=$(whoami 2>/dev/null || echo unknown), sudo=${SUDO_USER:-root}"
 }
 
 update_system() {
@@ -118,6 +203,9 @@ create_deploy_user() {
 
 setup_firewall() {
   require_apt
+  if ! cloud_guard_prompt "configuring UFW firewall"; then
+    return
+  fi
   log "Configuring UFW firewall..."
   DEBIAN_FRONTEND=noninteractive apt-get install -y ufw
 
@@ -133,6 +221,7 @@ setup_firewall() {
   ufw default allow outgoing
   ufw --force enable
   log "UFW enabled with ports 22, ${ssh_port}, 80, 81, 443, 9000 allowed."
+  ufw status verbose | tee -a "${LOG_FILE}" || true
 }
 
 get_ssh_port() {
@@ -143,10 +232,13 @@ get_ssh_port() {
 
 harden_sshd() {
   require_root
+  if ! cloud_guard_prompt "SSH hardening"; then
+    return
+  fi
   local ssh_port
   ssh_port="$(get_ssh_port)"
   read -r -p "SSH port to keep [${ssh_port}]: " entered_port
-  ssh_port="${entered_port:-${ssh_port}}"
+  ssh_port="$(sanitize_port "${entered_port}" "${ssh_port}")"
 
   cp /etc/ssh/sshd_config /etc/ssh/sshd_config.qs.bak
   log "Backup created at /etc/ssh/sshd_config.qs.bak"
@@ -194,6 +286,14 @@ install_docker() {
   curl -fsSL test.docker.com -o "${installer}"
   sh "${installer}"
 
+  if command -v apt-get >/dev/null 2>&1; then
+    if DEBIAN_FRONTEND=noninteractive apt-get install -y docker-compose-plugin; then
+      log "docker-compose-plugin installed via apt."
+    else
+      log "docker-compose-plugin install failed; will try pip if available."
+    fi
+  fi
+
   local target_user="${SUDO_USER:-root}"
   if id -u "${target_user}" >/dev/null 2>&1; then
     usermod -aG docker "${target_user}"
@@ -202,7 +302,9 @@ install_docker() {
     log "User ${target_user} not found; skipped group addition."
   fi
 
-  if command -v pip3 >/dev/null 2>&1; then
+  if docker compose version >/dev/null 2>&1; then
+    log "docker compose plugin available."
+  elif command -v pip3 >/dev/null 2>&1; then
     pip3 install docker-compose
     log "docker-compose installed via pip3."
   else
@@ -212,7 +314,9 @@ install_docker() {
   systemctl enable docker
   systemctl start docker
   rm -f "${installer}"
-  log "Docker installation complete."
+  local docker_info
+  docker_info=$(docker info --format 'Docker engine: {{.ServerVersion}}' 2>/dev/null || true)
+  log "Docker installation complete. ${docker_info:-Docker info unavailable.}"
 }
 
 install_tailscale() {
@@ -280,12 +384,18 @@ EOF
   systemctl enable fail2ban
   systemctl start fail2ban
   log "Fail2ban configured and started."
+  fail2ban-client status sshd | tee -a "${LOG_FILE}" >/dev/null || log "Fail2ban sshd jail status unavailable."
 }
 
 configure_dns() {
   require_root
   log "Writing /etc/systemd/resolved.conf with local DNS and disabled stub listener..."
-  cat >/etc/systemd/resolved.conf <<'EOF'
+  local resolved_conf="/etc/systemd/resolved.conf"
+  if [[ -f "${resolved_conf}" && ! -f "${resolved_conf}.qs.bak" ]]; then
+    cp "${resolved_conf}" "${resolved_conf}.qs.bak"
+    log "Backup created at ${resolved_conf}.qs.bak"
+  fi
+  cat >"${resolved_conf}" <<'EOF'
 [Resolve]
 DNS=127.0.0.1
 #FallbackDNS=
@@ -310,6 +420,7 @@ EOF
   else
     log "systemd-resolved not present; leaving /etc/resolv.conf untouched."
   fi
+  { head -n 5 /etc/resolv.conf 2>/dev/null || true; } | tee -a "${LOG_FILE}" >/dev/null
 }
 
 configure_bashrc() {
@@ -350,6 +461,65 @@ EOF
   log "Appended aliases/environment/startup block to ${bashrc} for ${target_user}."
 }
 
+rollback_qs_changes() {
+  require_root
+  log "Starting best-effort rollback of QS changes..."
+
+  if [[ -f /etc/ssh/sshd_config.qs.bak ]]; then
+    cp /etc/ssh/sshd_config.qs.bak /etc/ssh/sshd_config
+    systemctl restart ssh || true
+    log "Restored /etc/ssh/sshd_config from backup."
+  else
+    log "No sshd_config.qs.bak found; skipping SSH rollback."
+  fi
+
+  local resolved_conf="/etc/systemd/resolved.conf"
+  if [[ -f "${resolved_conf}.qs.bak" ]]; then
+    cp "${resolved_conf}.qs.bak" "${resolved_conf}"
+    systemctl restart systemd-resolved || true
+    log "Restored ${resolved_conf} from backup."
+  else
+    log "No resolved.conf backup found; skipping DNS rollback."
+  fi
+
+  if swapon --show | grep -q '/swapfile'; then
+    swapoff /swapfile || true
+    log "Swapfile deactivated."
+  fi
+  if [[ -f /swapfile ]]; then
+    rm -f /swapfile
+    log "Swapfile removed."
+  fi
+  if grep -q "^/swapfile" /etc/fstab 2>/dev/null; then
+    sed -i '/^\\/swapfile /d' /etc/fstab
+    log "Removed swapfile entry from /etc/fstab."
+  fi
+
+  local target_user="${SUDO_USER:-root}"
+  local target_home
+  target_home="$(eval echo "~${target_user}")"
+  local bashrc="${target_home}/.bashrc"
+  if [[ -f "${bashrc}" ]]; then
+    sed -i '/# QS_SETUP_ALIASES/,/# END_QS_SETUP_ALIASES/d' "${bashrc}"
+    log "Removed QS alias block from ${bashrc}."
+  fi
+
+  local hush="${target_home}/.hushlogin"
+  if [[ -f "${hush}" ]]; then
+    rm -f "${hush}"
+    log "Removed ${hush}."
+  fi
+
+  if command -v ufw >/dev/null 2>&1 && ufw status | grep -q "Status: active"; then
+    if confirm "Disable UFW as part of rollback? [y/N] "; then
+      ufw --force disable
+      log "UFW disabled."
+    fi
+  fi
+
+  log "Rollback complete (best effort)."
+}
+
 run_all_steps() {
   set_timezone_uk
   if confirm "Set root password during run-all? [y/N] "; then
@@ -367,6 +537,7 @@ run_all_steps() {
   setup_unattended_upgrades
   configure_dns
   configure_bashrc
+  system_summary
   log "All selected steps completed."
 }
 
@@ -390,7 +561,7 @@ set_timezone_uk() {
 setup_swap() {
   local size
   read -r -p "Swap size in GB [2]: " size
-  size="${size:-2}"
+  size="$(sanitize_swap_size "${size}" "2")"
 
   if swapon --show | grep -q 'file'; then
     log "Swap already configured; skipping."
@@ -414,6 +585,7 @@ setup_unattended_upgrades() {
   DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades
   dpkg-reconfigure -plow unattended-upgrades
   log "Unattended upgrades enabled."
+  systemctl is-enabled unattended-upgrades >/dev/null 2>&1 && log "unattended-upgrades service enabled." || log "unattended-upgrades enablement status unknown."
 }
 
 system_summary() {
@@ -464,6 +636,7 @@ menu() {
 11) Configure DNS (resolved.conf)
 12) Configure .bashrc (aliases/env/startup)
 13) Run all steps
+14) Rollback QS changes (best effort)
 0) Exit
 EOF
     read -rp "Choose an option: " choice
@@ -481,6 +654,7 @@ EOF
       11) configure_dns ;;
       12) configure_bashrc ;;
       13) run_all_steps ;;
+      14) rollback_qs_changes ;;
       0) log "Exiting."; exit 0 ;;
       *) echo "Invalid choice." ;;
     esac
@@ -491,6 +665,8 @@ EOF
 main() {
   require_root
   require_apt
+  detect_cloud_provider
+  preflight_check
   log "Logging to ${LOG_FILE}"
   menu
 }

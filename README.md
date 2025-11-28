@@ -7,6 +7,8 @@ Usage
 -----
 - Run with logging: `sudo QS_LOG=/var/log/qs-setup.log ./qs.sh` (defaults to `/tmp/qs-setup.log`).
 - The script checks for `apt-get` and exits early if the host is not Debian/Ubuntu-based.
+- A preflight check runs up front (root, `apt-get`, `systemctl`, `curl`) and logs detected cloud provider (AWS/GCP/OCI/unknown).
+- Logging now includes timestamp, host, and sudo user context for easier auditing.
 - Actions are menu-driven; select numbers to run tasks, or choose "Run all" for the full sequence.
 
 Menu actions
@@ -16,14 +18,15 @@ Menu actions
 - System update & upgrade: Runs `apt update/upgrade`, fixes broken installs, and autoremove.
 - Install base packages: Installs a curated set (unzip, nano, lsof, cron, fail2ban, curl, python3/pip, git, ufw, tmux, aptitude, net-tools, pwgen, unattended-upgrades, apt-listchanges, libffi-dev, libssl-dev, etc.).
 - Suppress login banner: Creates `.hushlogin` for the invoking user (or root).
-- Configure firewall (UFW): Enables UFW, allows SSH (detected port and 22), HTTP/HTTPS, and common app ports (80, 81, 443, 9000); defaults to deny incoming/allow outgoing.
-- Install Docker: Uses the Docker convenience script, adds the invoking user to the `docker` group, installs `docker-compose` via pip if available, and enables/starts the daemon.
+- Configure firewall (UFW): Enables UFW, allows SSH (detected port and 22), HTTP/HTTPS, and common app ports (80, 81, 443, 9000); defaults to deny incoming/allow outgoing. Warns on cloud VMs before changing firewall rules and logs `ufw status`.
+- Install Docker: Uses the Docker convenience script, adds the invoking user to the `docker` group, installs the `docker-compose` plugin when available (falls back to pip), enables/starts the daemon, and logs engine info.
 - Install Tailscale: Runs the official install script, adds the repository/keyring, enables IP forwarding, and optionally runs `tailscale up` with exit-node/routes/SSH settings.
-- Configure Fail2ban: Ensures `jail.local` exists with an `sshd` jail, then enables/starts the service.
-- Enable unattended upgrades: Installs and reconfigures `unattended-upgrades`.
-- Configure DNS: Writes `/etc/systemd/resolved.conf` with 127.0.0.1 as DNS and disables the stub listener; restarts `systemd-resolved` when present.
+- Configure Fail2ban: Ensures `jail.local` exists with an `sshd` jail, then enables/starts the service and logs `fail2ban-client status sshd`.
+- Enable unattended upgrades: Installs and reconfigures `unattended-upgrades` and confirms service enablement.
+- Configure DNS: Backs up `/etc/systemd/resolved.conf` (if present), writes a new config with 127.0.0.1 DNS and disabled stub listener, and restarts `systemd-resolved` when present.
 - Configure .bashrc: Appends aliases, an `RCLONE_CONFIG` export, and startup helpers (`fastfetch`, `docker container ls`) for the invoking user.
-- Run all steps: Runs a guided baseline (timezone, optional root password, update/packages, hushlogin, firewall, Docker, Tailscale, Fail2ban, unattended upgrades, DNS, bashrc).
+- Run all steps: Runs a guided baseline (timezone, optional root password, update/packages, hushlogin, firewall, Docker, Tailscale, Fail2ban, unattended upgrades, DNS, bashrc) and prints a system summary.
+- Rollback QS changes: Best-effort restore of SSH config (from `.qs.bak`), DNS config, swapfile, UFW state (optional), `.bashrc` aliases, and `.hushlogin`.
 - Exit: Quit the menu.
 
 Helpers and safeguards
@@ -32,6 +35,9 @@ Helpers and safeguards
 - `set -euo pipefail` to stop on errors and catch unset variables.
 - `harden_sshd` (used in the recommended quickstart path) backs up `/etc/ssh/sshd_config` before applying stricter settings and restarts `sshd`; restores the backup on restart failure.
 - Logging: All steps append to `QS_LOG` (defaults to `/tmp/qs-setup.log`).
+- Input validation: SSH port prompts are validated to `1-65535`; swap size prompts are limited to `1-64` GB with sane defaults.
+- Cloud guard: Network-impacting steps prompt for confirmation on detected cloud providers to avoid conflicts with cloud firewalls.
+- DNS safety: `/etc/systemd/resolved.conf` is backed up before rewrite and can be restored via rollback.
 
 Suggested flow
 --------------
