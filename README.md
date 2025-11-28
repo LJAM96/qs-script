@@ -19,7 +19,7 @@ Menu actions
 - Install base packages: Installs a curated set (unzip, nano, lsof, cron, fail2ban, curl, python3/pip, git, ufw, tmux, aptitude, net-tools, pwgen, unattended-upgrades, apt-listchanges, libffi-dev, libssl-dev, etc.).
 - Suppress login banner: Creates `.hushlogin` for the invoking user (or root).
 - Configure firewall (UFW): Enables UFW, allows SSH (detected port and 22), HTTP/HTTPS, and common app ports (80, 81, 443, 9000); defaults to deny incoming/allow outgoing. Warns on cloud VMs before changing firewall rules and logs `ufw status`.
-- Install Docker: Uses the Docker convenience script, adds the invoking user to the `docker` group, installs the `docker-compose` plugin when available (falls back to pip unless Python is externally managed), enables/starts the daemon, and logs engine info.
+- Install Docker: Skips reinstall if Docker already exists; otherwise uses the Docker convenience script, adds the invoking user to the `docker` group, attempts the `docker-compose` plugin/binary via apt (no pip on externally managed Python), enables/starts the daemon, and logs engine info.
 - Install Tailscale: Runs the official install script, adds the repository/keyring, enables IP forwarding, and optionally runs `tailscale up` with exit-node/routes/SSH settings.
 - Configure Fail2ban: Ensures `jail.local` exists with an `sshd` jail, then enables/starts the service and logs `fail2ban-client status sshd`.
 - Enable unattended upgrades: Installs and reconfigures `unattended-upgrades` and confirms service enablement.

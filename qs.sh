@@ -281,17 +281,39 @@ install_docker() {
     DEBIAN_FRONTEND=noninteractive apt install -y curl
   fi
 
-  log "Installing Docker via test.docker.com convenience script..."
-  local installer="/tmp/get-docker.sh"
-  curl -fsSL test.docker.com -o "${installer}"
-  sh "${installer}"
+  if command -v docker >/dev/null 2>&1; then
+    log "Docker already installed; skipping convenience installer."
+  else
+    log "Installing Docker via test.docker.com convenience script..."
+    local installer="/tmp/get-docker.sh"
+    curl -fsSL test.docker.com -o "${installer}"
+    sh "${installer}"
+    rm -f "${installer}"
+  fi
 
-  if command -v apt-get >/dev/null 2>&1; then
-    if DEBIAN_FRONTEND=noninteractive apt-get install -y docker-compose-plugin; then
-      log "docker-compose-plugin installed via apt."
-    else
-      log "docker-compose-plugin install failed; will try pip if available."
+  local compose_available=0
+  if docker compose version >/dev/null 2>&1; then
+    compose_available=1
+    log "docker compose plugin available."
+  elif command -v docker-compose >/dev/null 2>&1; then
+    compose_available=1
+    log "docker-compose standalone already available."
+  else
+    if command -v apt-get >/dev/null 2>&1; then
+      if DEBIAN_FRONTEND=noninteractive apt-get install -y docker-compose-plugin docker-compose; then
+        if docker compose version >/dev/null 2>&1 || command -v docker-compose >/dev/null 2>&1; then
+          compose_available=1
+          log "docker-compose plugin/binary installed via apt."
+        fi
+      else
+        log "docker-compose plugin install via apt failed."
+      fi
     fi
+  fi
+
+  local python_managed=0
+  if compgen -G "/usr/lib/python*/EXTERNALLY-MANAGED" >/dev/null; then
+    python_managed=1
   fi
 
   local target_user="${SUDO_USER:-root}"
@@ -302,27 +324,17 @@ install_docker() {
     log "User ${target_user} not found; skipped group addition."
   fi
 
-  local python_managed=0
-  if compgen -G "/usr/lib/python*/EXTERNALLY-MANAGED" >/dev/null; then
-    python_managed=1
+  if ((python_managed)) && ((compose_available == 0)); then
+    log "Python is externally managed; skipped pip install. Install docker-compose via apt or pipx if needed."
+  elif ((compose_available == 0)); then
+    log "docker-compose not available; install manually (apt docker-compose-plugin or pipx docker-compose) if required."
   fi
 
-  if docker compose version >/dev/null 2>&1; then
-    log "docker compose plugin available."
-  elif command -v docker-compose >/dev/null 2>&1; then
-    log "docker-compose standalone already available."
-  elif ((python_managed)) || [[ -f /usr/lib/python*/EXTERNALLY-MANAGED ]]; then
-    log "Python is externally managed; skipping pip docker-compose install. Use apt docker-compose-plugin or pipx if needed."
-  elif command -v pip3 >/dev/null 2>&1; then
-    pip3 install docker-compose
-    log "docker-compose installed via pip3."
-  else
-    log "pip3 not found; skipped docker-compose installation."
+  if command -v systemctl >/dev/null 2>&1 && command -v docker >/dev/null 2>&1; then
+    systemctl enable docker
+    systemctl start docker
   fi
 
-  systemctl enable docker
-  systemctl start docker
-  rm -f "${installer}"
   local docker_info
   docker_info=$(docker info --format 'Docker engine: {{.ServerVersion}}' 2>/dev/null || true)
   log "Docker installation complete. ${docker_info:-Docker info unavailable.}"
