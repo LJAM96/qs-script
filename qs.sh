@@ -488,15 +488,15 @@ install_fastfetch() {
     log "fastfetch already installed; skipping."
     return
   fi
-  local arch pkg_url tmp_pkg
+  local arch asset_arch pkg_url tmp_pkg
   arch="$(uname -m)"
   case "${arch}" in
-    x86_64|amd64) arch="amd64" ;;
-    aarch64|arm64) arch="arm64" ;;
+    x86_64|amd64) asset_arch="amd64" ;;
+    aarch64|arm64) asset_arch="aarch64" ;;
     *) log "Unsupported arch ${arch}; skipping fastfetch install."; return ;;
   esac
-  pkg_url="https://github.com/fastfetch-cli/fastfetch/releases/latest/download/fastfetch-linux-${arch}.deb"
-  tmp_pkg="/tmp/fastfetch-linux-${arch}.deb"
+  pkg_url="https://github.com/fastfetch-cli/fastfetch/releases/latest/download/fastfetch-linux-${asset_arch}.deb"
+  tmp_pkg="/tmp/fastfetch-linux-${asset_arch}.deb"
   log "Fetching fastfetch from ${pkg_url}..."
   if curl -fsSL "${pkg_url}" -o "${tmp_pkg}"; then
     if dpkg -i "${tmp_pkg}"; then
