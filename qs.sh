@@ -28,6 +28,7 @@ SUPPORTED_PKGS=(
   pwgen
   unattended-upgrades
   apt-listchanges
+  fastfetch
 )
 
 require_root() {
