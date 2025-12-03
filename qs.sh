@@ -13,6 +13,7 @@ SUPPORTED_PKGS=(
   nano
   lsof
   cron
+  cloud-guest-utils
   fail2ban
   libffi-dev
   libssl-dev
